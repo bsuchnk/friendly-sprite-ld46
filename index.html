@@ -1,0 +1,556 @@
+﻿<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta lang="en-us">
+    <title>LD46</title>
+    <script src="js/phaser.min.js"></script>
+</head>
+<body>
+    <script>
+
+    class Entity extends Phaser.GameObjects.Sprite {
+        constructor(scene, x, y, key) {
+            super(scene, x, y, key);
+
+            this.scene = scene;
+            this.scene.add.existing(this);
+            this.scene.physics.world.enableBody(this, 0);
+
+            this.dirEnum = {
+                LEFT: 'left',
+                RIGHT: 'right'
+            }
+            this.dir = this.dirEnum.RIGHT;
+        }
+    }
+
+    class Bullet extends Entity {
+        constructor(scene, x, y, key) {
+            super(scene, x, y, key);
+        }
+
+        initialize() {
+            this.dir = this.scene.player.dir;
+            if (this.dir == this.dirEnum.RIGHT)
+                this.body.setVelocityX(1000);
+            else
+                this.body.setVelocityX(-1000);
+            this.body.setAllowGravity(false);
+
+            this.emitter = this.scene.sparkle.createEmitter({
+                speed: 50,
+                scale: { start: 0.4, end: 0.2 },
+                alpha: { start: 1, end: 0 },
+                blendMode: 'COLOR',
+                lifespan: 200
+            });
+            this.emitter.startFollow(this);
+        }
+
+        explode() {
+            this.emitter.explode(1);
+            this.destroy();
+        }
+    }
+
+    class EnemyBullet extends Entity {
+        constructor(scene, x, y, key) {
+            super(scene, x, y, key);
+        }
+
+        initialize(dir) {
+            this.dir = dir;
+            if (this.dir == this.dirEnum.RIGHT)
+                this.body.setVelocityX(750);
+            else
+                this.body.setVelocityX(-750);
+            this.body.setAllowGravity(false);
+        }
+
+        update() {
+            //this.scene.enemyBulletParticleEmitter.explode(1, this.x, this.y);
+            let d = Phaser.Math.Distance.Between(this.x, this.y, this.scene.fairy.x, this.scene.fairy.y);
+            if (d < 22) {
+                this.scene.fairy.die();
+                this.scene.player.die(false, false);
+            }
+        }
+    }
+
+    class Player extends Entity {
+        constructor(scene, x, y, key) {
+            super(scene, x, y, key);
+
+            this.body.setCollideWorldBounds(true);
+            this.setDepth(10);
+            this.scene.cameras.main.startFollow(this);
+            //this.body.setFriction(1);
+            //this.body.setAllowDrag(true);
+            //this.body.setDrag(2000, 0);
+
+            this.reloadTime = 10;
+            this.reload = 0;
+
+            this.inTheAir = true;
+            this.dead = false;
+        }
+
+        goUp() {
+            this.body.setVelocityY(-600);
+            this.scene.sound.play('jump');
+        }
+
+        goLeft() {
+            this.body.setVelocityX(-400);
+            this.dir = this.dirEnum.LEFT;
+            this.play('stay_left', true);
+        }
+
+        goRight() {
+            this.body.setVelocityX(400);
+            this.dir = this.dirEnum.RIGHT;
+            this.play('stay_right', true);
+        }
+
+        stay() {
+            this.body.setVelocityX(0);
+            if (this.dir == this.dirEnum.LEFT)
+                this.play('stay_left', true);
+            else
+                this.play('stay_right', true);
+        }
+
+        shoot() {
+            if (this.reload > 0) return;
+            
+            let bullet = new Bullet(this.scene, this.x, this.y, 'bullet');
+            this.scene.bullets.add(bullet);
+            bullet.initialize();
+
+            this.scene.enemyBulletParticleEmitter.explode(2, this.x, this.y);
+            this.scene.sound.play('shoot');
+
+            this.reload = this.reloadTime;
+        }
+
+        update() {
+            if (this.dead) return;
+
+            if (this.inTheAir && this.body.blocked.down) {
+                this.scene.dustEmitter.explode(50, this.x, (Math.floor(this.y / 32 + 1) * 32));
+                this.scene.sound.play('land');
+                this.inTheAir = false;
+            }
+            else if (!this.inTheAir && !this.body.blocked.down) {
+                this.inTheAir = true;
+            }
+
+            if (this.reload > 0)
+                this.reload--;
+            
+            let tile = this.scene.layer.getTileAtWorldXY(this.x, this.y, true);
+            if (tile.index == 12 && this.body.blocked.down) {
+                this.die(true, false);
+            }
+
+            let dToGate = Phaser.Math.Distance.Between(this.x, this.y, this.scene.gate.x, this.scene.gate.y);
+            if (dToGate < 32) {
+                this.scene.level++;
+                this.die(false, true);
+            }
+        }
+
+        die(rag, next) {
+            if (this.dead) return;
+            this.dead = true;
+
+            this.setActive(false);
+            this.setVisible(false);
+
+            if (!next)
+                this.scene.sound.play('kill');
+            else
+                this.scene.sound.play('next_level');
+
+            this.scene.cameras.main.shake(100, 0.02);
+            this.scene.cameras.main.stopFollow();
+            if (rag) {
+                let ragdoll = new EnemyRagdoll(this, 'hero');
+                this.scene.ragdolls.add(ragdoll); // DEAD
+                ragdoll.initialize();
+            }
+
+            this.scene.time.addEvent({
+                delay: 200,
+                callback: function () {
+                    this.scene.cameras.main.fadeOut(300);
+                },
+                callbackScope: this,
+                loop: false
+            });
+
+            this.scene.time.addEvent({
+                delay: 500,
+                callback: function () {
+                    this.scene.cameras.main.fadeIn(200);
+                    if (next) {
+                        this.scene.destroyLevel();
+                        this.scene.initializeLevel();
+                    }
+                    this.scene.restart();
+                },
+                callbackScope: this,
+                loop: false
+            });
+        }
+
+        restart() {
+            this.dir = this.dirEnum.RIGHT;
+            this.dead = false;
+            this.setActive(true);
+            this.setVisible(true);
+        }
+    }
+
+    class Enemy extends Entity {
+        constructor(scene, x, y, key) {
+            super(scene, x, y, key);
+
+            this.body.setCollideWorldBounds(true);
+            this.setDepth(9);
+
+            this.reloadTime = 90;
+            this.reload = Phaser.Math.Between(0, this.reloadTime);
+        }
+
+        update() {
+            if (this.scene.player.x < this.x) {
+                this.dir = this.dirEnum.LEFT;
+                this.play('stay_left', true);
+            }
+            else {
+                this.dir = this.dirEnum.RIGHT;
+                this.play('stay_right', true);
+            }
+
+            if (this.reload <= 0) {
+                let bullet = new EnemyBullet(this.scene, this.x, this.y, 'bullet');
+                this.scene.enemyBullets.add(bullet);
+                bullet.initialize(this.dir);
+
+                this.scene.enemyBulletParticleEmitter.explode(2, this.x, this.y);
+                this.scene.sound.play('shoot_enemy');
+
+                this.reload = this.reloadTime;
+            }
+            else {
+                this.reload--;
+            }
+        }
+    }
+
+    class EnemyRagdoll extends Entity {
+        constructor(entity, key) {
+            super(entity.scene, entity.x, entity.y, key);
+
+            this.setDepth(9);
+            this.dir = entity.dir;
+        }
+
+        initialize() {
+            if (this.dir == this.dirEnum.LEFT) {
+                this.body.setAngularVelocity(1000);
+                this.body.setVelocity(250, -300);
+            }
+            else {
+                this.body.setAngularVelocity(-1000);
+                this.body.setVelocity(-250, -300);
+            }
+        }
+    }
+
+    class Fairy extends Entity {
+        constructor(scene, x, y, key) {
+            super(scene, x, y, key);
+
+            this.body.setCollideWorldBounds(true);
+            this.setDepth(100);
+
+            this.body.setAllowGravity(false);
+            
+
+            this.emitterFairy = this.scene.sparkle.createEmitter({
+                speed: 50,
+                scale: { start: 0.6, end: 0.1 },
+                alpha: { start: 1, end: 0 },
+                blendMode: 'ADD'
+            });
+            this.emitterFairy.startFollow(this);
+
+            this.obj = scene.player;
+        }
+
+        update() {
+            this.scene.physics.moveTo(this, this.obj.x + ((this.scene.player.dir == this.scene.player.dirEnum.LEFT) ? 50 : -50), this.obj.y - 80, null, 500);
+        }
+
+        restart() {
+            this.setPosition(this.obj.x, this.obj.y);
+            this.emitterFairy.frequency = 0;
+        }
+
+        die() {
+            this.emitterFairy.explode(50);
+        }
+    }
+
+    class Gate extends Entity {
+        constructor(scene, x, y, key) {
+            super(scene, x, y, key);
+
+            this.body.setAllowGravity(false);
+            this.setDepth(8);
+        }
+
+        restart() {
+        }
+
+        die() {
+        }
+    }
+
+    class SceneGame extends Phaser.Scene {
+        constructor() {
+            super({ key: 'SceneGame' });
+        }
+
+        preload() {
+            this.load.image('tiles', 'assets/tileset.png');
+            this.load.tilemapTiledJSON('map', 'maps/map_corridors.json');
+            this.load.tilemapTiledJSON('winning', 'maps/map_winning.json');
+            this.load.tilemapTiledJSON('horizontal', 'maps/map_horizontal.json');
+            this.load.tilemapTiledJSON('small', 'maps/map_small.json');
+            this.load.tilemapTiledJSON('tutorial', 'maps/map_tutorial.json');
+
+            this.load.spritesheet('hero', 'assets/hero.png', { frameWidth: 16, frameHeight: 24 });
+
+            this.load.image('sparkle', 'assets/sparkle.png');
+            this.load.image('bullet', 'assets/bullet.png');
+            this.load.image('fairy', 'assets/fairy.png');
+            this.load.image('dust', 'assets/dust.png');
+            this.load.image('gate', 'assets/gate.png');
+
+            this.load.audio('shoot', 'assets/shoot.wav');
+            this.load.audio('shoot_enemy', 'assets/shoot_enemy.wav');
+            this.load.audio('jump', 'assets/jump.wav');
+            this.load.audio('kill', 'assets/kill.wav');
+            this.load.audio('land', 'assets/land.wav');
+            this.load.audio('next_level', 'assets/next_level.wav');
+
+            this.load.audio('music', 'assets/music.mp3');
+        }
+
+        create()
+        {
+            this.mus = this.sound.add('music');
+            this.mus.setLoop(true);
+            this.mus.setVolume(0.1);
+            this.mus.play();
+
+            this.anims.create({
+                key: 'stay_right',
+                frames: this.anims.generateFrameNumbers('hero', { start: 0, end: 1 }),
+                frameRate: 5,
+                repeat: -1
+            });
+            this.anims.create({
+                key: 'stay_left',
+                frames: this.anims.generateFrameNumbers('hero', { start: 2, end: 3 }),
+                frameRate: 5,
+                repeat: -1
+            });
+
+            this.maps = ['tutorial', 'small', 'horizontal', 'map', 'winning'];
+
+            this.gate = new Gate(this, 0, 0, 'gate');
+
+            this.enemies = this.physics.add.group({
+                runChildUpdate: true
+            });
+
+            this.player = new Player(this, 500, 800, 'hero');
+            
+            this.dust = this.add.particles('dust');
+            this.dust.setDepth(20);
+            this.dustEmitter = this.dust.createEmitter({
+                speed: 8,
+                scale: { start: 0.5, end: 1 },
+                alpha: { start: 0.4, end: 0 },
+                blendMode: 'COLOR',
+                
+            });
+            this.dustEmitter.setFrequency(-1);
+
+            this.sparkle = this.add.particles('sparkle');
+            this.sparkle.setDepth(99);
+            this.fairy = new Fairy(this, 550, 750, 'fairy');
+            
+            this.enemyBulletParticleEmitter = this.sparkle.createEmitter({
+                speed: 100,
+                scale: { start: 0.4, end: 0 },
+                alpha: { start: 1, end: 0 },
+                blendMode: 'COLOR',
+                lifespan: 200,
+                on: false
+            });
+
+            
+
+            this.bullets = this.physics.add.group({
+                runChildUpdate: true
+            });
+
+            this.enemyBullets = this.physics.add.group({
+                runChildUpdate: true
+            });
+            this.physics.add.collider(this.player, this.enemyBullets, function (player, bullet) {
+                player.die(true, false);
+                bullet.destroy();
+            }, null, this);
+
+            this.ragdolls = this.physics.add.group();
+            
+            this.cursors = this.input.keyboard.createCursorKeys();
+            this.keySpace = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+
+            this.level = 0;
+            this.initializeLevel();
+            this.restart();
+        }
+
+        update()
+        {
+            this.player.update();
+
+            if (this.cursors.left.isDown && !this.cursors.right.isDown) {
+                this.player.goLeft();
+                
+            }
+            else if (this.cursors.right.isDown && !this.cursors.left.isDown) {
+                this.player.goRight();
+            }
+            else {
+                this.player.stay();
+            }
+
+            if (this.cursors.up.isDown && !this.cursors.down.isDown && this.player.body.blocked.down) {
+                this.player.goUp();
+            }
+
+            if (this.keySpace.isDown) {
+                this.player.shoot();
+            }
+
+            this.fairy.update();
+        }
+
+        restart() {
+            this.enemies.children.each(x=>x.destroy());
+            this.ragdolls.children.each(x=>x.destroy());
+            this.bullets.children.each(x=>x.explode());
+            this.enemyBullets.children.each(x=>x.destroy());
+
+            this.map.filterObjects('objects', (obj) => {
+                if (obj.name == 'shooter') {
+                    this.enemies.add(new Enemy(this, obj.x, obj.y, 'hero'));
+                }
+                
+                if (obj.name == 'player') {
+                    this.player.setPosition(obj.x, obj.y);
+                }
+
+                if (obj.name == 'gate') {
+                    this.gate.setPosition(obj.x, obj.y-32);
+                }
+            });
+
+            this.player.restart();
+            this.fairy.restart();
+            this.cameras.main.startFollow(this.player);
+        }
+
+        destroyLevel() {
+            this.collider0.destroy();
+            this.collider1.destroy();
+            this.collider2.destroy();
+            this.collider3.destroy();
+            this.collider4.destroy();
+
+            this.frgLayer.destroy();
+            this.bcgLayer.destroy();
+            this.layer.destroy();
+        }
+
+        initializeLevel() {
+            this.map = this.make.tilemap({ key: this.maps[this.level] });
+            this.tiles = this.map.addTilesetImage('tileset', 'tiles');
+
+            this.bcgLayer = this.map.createStaticLayer('background', this.tiles, 0, 0);
+            this.frgLayer = this.map.createStaticLayer('foreground', this.tiles, 0, 0);
+            this.frgLayer.setDepth(21);
+
+            this.layer = this.map.createStaticLayer('main', this.tiles, 0, 0);
+            this.layer.setCollisionByProperty({ collides: true });
+            this.physics.world.setBounds(0, 0, this.map.widthInPixels, this.map.heightInPixels);
+            this.cameras.main.setBounds(0, 0, this.map.widthInPixels, this.map.heightInPixels);
+
+            this.collider0 = this.physics.add.collider(this.player, this.layer);
+
+            this.collider3 = this.physics.add.collider(this.bullets, this.layer, function (bullet, layer) {
+                this.cameras.main.shake(40, 0.002);
+                bullet.explode();
+            }, null, this);
+
+            this.collider1 = this.physics.add.collider(this.enemyBullets, this.layer, function (bullet, layer) {
+                this.enemyBulletParticleEmitter.explode(3, bullet.x, bullet.y);
+                bullet.destroy();
+            }, null, this);
+
+            this.collider2 = this.physics.add.collider(this.bullets, this.enemies, function (bullet, enemy) {
+                bullet.explode();
+                this.sound.play('kill');
+                let ragdoll = new EnemyRagdoll(enemy, 'hero');
+                this.ragdolls.add(ragdoll); // DEAD
+                ragdoll.initialize();
+                enemy.destroy();
+                this.cameras.main.shake(50, 0.01);
+            }, null, this);
+
+            this.collider4 = this.physics.add.collider(this.enemies, this.layer);
+        }
+    }
+
+    var config = {
+        type: Phaser.AUTO,
+        width: 800,
+        height: 600,
+        backgroundColor: '#000',
+        physics: {
+            default: 'arcade',
+            arcade: {
+                gravity: { y: 1200 }
+            }
+        },
+        scene: [
+            SceneGame
+        ],
+        pixelArt: true,
+        roundPixels: true
+    };
+
+    var game = new Phaser.Game(config);
+
+    </script>
+</body>
+</html>
